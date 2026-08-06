@@ -35,8 +35,9 @@ function injectInterceptionScript() {
             const clonedResponse = response.clone();
             clonedResponse.json().then(data => {
               console.log('📦 Fetch response data:', data);
+              const detailsList = data?.data?.order_data?.details_list || data?.new_data?.order_data?.details_list || data?.data?.details_list || data?.new_data?.details_list;
               
-              if (data && data.data?.order_data?.details_list) {
+              if (data && (detailsList || data.data || data.new_data)) {
                 // Extract offset from URL to track pages
                 const offsetMatch = url.match(/offset=(\\d+)/);
                 const offset = offsetMatch ? parseInt(offsetMatch[1]) : 0;
@@ -48,7 +49,11 @@ function injectInterceptionScript() {
                   
                   // Trigger custom event for content script
                   window.dispatchEvent(new CustomEvent('shopeeDataCollected', {
-                    detail: { offset, totalPages: window.shopeeCollectedData.length }
+                    detail: { 
+                      offset, 
+                      totalPages: window.shopeeCollectedData.length,
+                      newData: data
+                    }
                   }));
                 }
               }
@@ -80,7 +85,9 @@ function injectInterceptionScript() {
               const data = JSON.parse(xhr.responseText);
               console.log('📦 XHR response data:', data);
               
-              if (data && data.data?.order_data?.details_list) {
+              const detailsList = data?.data?.order_data?.details_list || data?.new_data?.order_data?.details_list || data?.data?.details_list || data?.new_data?.details_list;
+              
+              if (data && (detailsList || data.data || data.new_data)) {
                 // Extract offset from URL to track pages
                 const offsetMatch = url.match(/offset=(\\d+)/);
                 const offset = offsetMatch ? parseInt(offsetMatch[1]) : 0;
@@ -92,7 +99,11 @@ function injectInterceptionScript() {
                   
                   // Trigger custom event for content script
                   window.dispatchEvent(new CustomEvent('shopeeDataCollected', {
-                    detail: { offset, totalPages: window.shopeeCollectedData.length }
+                    detail: { 
+                      offset, 
+                      totalPages: window.shopeeCollectedData.length,
+                      newData: data
+                    }
                   }));
                 }
               }
@@ -118,14 +129,32 @@ function injectInterceptionScript() {
 
 // Listen for data collection events from injected script
 window.addEventListener('shopeeDataCollected', (event) => {
-  const { offset, totalPages } = event.detail;
+  const { offset, totalPages, newData } = event.detail;
   console.log(`🎉 Content script received data collection event: offset ${offset}, total pages: ${totalPages}`);
   
-  // Update our tracking
-  allOrderData = window.shopeeCollectedData || [];
-  collectedPages = window.shopeeCollectedPages || new Set();
+  // Add new data to our tracking
+  if (newData && !collectedPages.has(offset)) {
+    allOrderData.push(newData);
+    collectedPages.add(offset);
+  }
   
   console.log(`📊 Current collection status: ${allOrderData.length} pages collected`);
+  
+  // Prepare data for download
+  window.currentCollectedData = {
+    total_pages: allOrderData.length,
+    collected_at: new Date().toISOString(),
+    collection_method: 'passive_interception',
+    all_data: allOrderData
+  };
+  
+  // Update UI if available
+  if (window.liveUpdateSummary) {
+    window.liveUpdateSummary(allOrderData, false);
+    if (window.updateShopeeProgress) {
+      window.updateShopeeProgress(`✅ Passively captured ${allOrderData.length} pages of orders! Keep scrolling for more, or download now.`, 'success');
+    }
+  }
 });
 
 // Function to download JSON data (kept for compatibility)
@@ -174,10 +203,16 @@ function convertToCSV(data) {
   ];
   csvRows.push(headers.join(','));
   
-  // Process each page of data
   data.all_data.forEach(pageData => {
-    if (pageData.data?.order_data?.details_list) {
-      const orders = pageData.data.order_data.details_list;
+    let orders = pageData.data?.order_data?.details_list || pageData.new_data?.order_data?.details_list || pageData.data?.details_list || pageData.new_data?.details_list;
+    if (!orders) {
+      const wrappers = pageData.data?.order_or_checkout_data || pageData.new_data?.order_or_checkout_data;
+      if (wrappers && Array.isArray(wrappers)) {
+        orders = wrappers.map(w => w.order_list_detail).filter(Boolean);
+      }
+    }
+    
+    if (orders && Array.isArray(orders)) {
       
       orders.forEach(order => {
         // Extract order-level information
@@ -923,22 +958,73 @@ async function directFetchWithAuth() {
         console.log(`Error ${response.status}:`, errorText);
         
         if (response.status === 403) {
-          updateProgress('🔐 Access denied. Please make sure you are logged in to Shopee.', 'error');
-          console.log('🔑 Authentication issue. You might need to:');
-          console.log('1. Make sure you are logged in to Shopee');
-          console.log('2. Try scrolling manually first to trigger a real request');
-          console.log('3. Check if you have any ad blockers interfering');
+          updateProgress('🔐 Shopee Security block detected.<br>🤖 Switching to Auto-Scroll mode to bypass...', 'warning');
+          console.log('🔑 HTTP 403 Anti-Bot block. Switching to auto-scroll.');
+          
+          let scrollAttempts = 0;
+          const maxScrollAttempts = 100;
+          let noNewDataCounter = 0;
+          const maxNoNewDataAttempts = 5;
+          let previousDataCount = typeof allOrderData !== 'undefined' ? allOrderData.length : 0;
+          let lastScrollPos = -1;
+          
+          while (scrollAttempts < maxScrollAttempts && noNewDataCounter < maxNoNewDataAttempts) {
+            const documentHeight = document.body.scrollHeight;
+            const currentScrollPos = window.pageYOffset || document.documentElement.scrollTop;
+            
+            // Fast linear scroll to page bottom
+            window.scrollTo({ top: documentHeight, behavior: 'auto' });
+            
+            const currentCount = typeof allOrderData !== 'undefined' ? allOrderData.length : 0;
+            updateProgress(`⚡ Fast Auto-Scrolling... (${currentCount} pages captured)`, 'info');
+            
+            // Check if scroll position is stuck at the bottom
+            if (Math.ceil(currentScrollPos + window.innerHeight) >= documentHeight - 20 && currentScrollPos === lastScrollPos) {
+              noNewDataCounter++;
+            }
+            lastScrollPos = currentScrollPos;
+            
+            // Short delay (750ms) for fast throughput while allowing network API responses to fire
+            await new Promise(resolve => setTimeout(resolve, 750));
+            
+            const newCount = typeof allOrderData !== 'undefined' ? allOrderData.length : 0;
+            if (newCount === previousDataCount) {
+              noNewDataCounter++;
+            } else {
+              noNewDataCounter = 0; // Reset counter whenever new data arrives
+              previousDataCount = newCount;
+            }
+            scrollAttempts++;
+          }
+          
+          if (typeof allOrderData !== 'undefined' && allOrderData.length > 0) {
+            updateProgress(`✅ Auto-Scroll complete! Captured ${allOrderData.length} pages.`, 'success');
+            return {
+              success: true,
+              data: window.currentCollectedData,
+              allData: allOrderData
+            };
+          } else {
+            return { success: false, data: null, allData: [] };
+          }
         } else {
           updateProgress('❌ Unable to connect to Shopee. Please try again.', 'error');
+          break;
         }
-        break;
       }
       
       const data = await response.json();
       console.log('Response data:', data);
       
-      if (data.data?.order_data?.details_list) {
-        const orders = data.data.order_data.details_list;
+      let orders = data.data?.order_data?.details_list || data.new_data?.order_data?.details_list || data.data?.details_list || data.new_data?.details_list;
+      if (!orders) {
+        const wrappers = data.data?.order_or_checkout_data || data.new_data?.order_or_checkout_data;
+        if (wrappers && Array.isArray(wrappers)) {
+          orders = wrappers.map(w => w.order_list_detail).filter(Boolean);
+        }
+      }
+      
+      if (orders && Array.isArray(orders)) {
         if (orders.length === 0) {
           updateProgress(`✅ Reached the end! Found ${totalOrdersFound} orders across ${allData.length} pages.`, 'success');
           console.log('No more orders, stopping...');
@@ -1153,9 +1239,14 @@ function addFetchButton() {
   
   // Download button click handler
   downloadButton.onclick = () => {
-    if (collectedOrderData) {
-      downloadCSV(collectedOrderData, `shopee_orders_${Date.now()}.csv`);
-      updateProgress('🎯 CSV file downloaded to your downloads folder!', 'success');
+    const dataToDownload = collectedOrderData || window.currentCollectedData;
+    if (dataToDownload) {
+      // Download both CSV and JSON to help debug API changes
+      downloadCSV(dataToDownload, `shopee_orders_${Date.now()}.csv`);
+      downloadJSON(dataToDownload, `shopee_raw_data_${Date.now()}.json`);
+      updateProgress('🎯 CSV and JSON files downloaded! (Please check the JSON to see the data structure)', 'success');
+    } else {
+      updateProgress('⚠️ No data available to download yet.', 'warning');
     }
   };
   
@@ -1166,8 +1257,15 @@ function addFetchButton() {
     let totalAmount = 0;
     
     allData.forEach(pageData => {
-      if (pageData.data?.order_data?.details_list) {
-        const orders = pageData.data.order_data.details_list;
+      let orders = pageData.data?.order_data?.details_list || pageData.new_data?.order_data?.details_list || pageData.data?.details_list || pageData.new_data?.details_list;
+      if (!orders) {
+        const wrappers = pageData.data?.order_or_checkout_data || pageData.new_data?.order_or_checkout_data;
+        if (wrappers && Array.isArray(wrappers)) {
+          orders = wrappers.map(w => w.order_list_detail).filter(Boolean);
+        }
+      }
+      
+      if (orders && Array.isArray(orders)) {
         totalOrders += orders.length;
         
         orders.forEach(order => {
@@ -1208,74 +1306,86 @@ function addFetchButton() {
     }
   }
   
-  // Combined action: capture headers + fetch data
+  // Action button - Fast passive capture
+  actionButton.textContent = '⚡ Auto-Collect Orders';
+  
   actionButton.onclick = async () => {
     if (actionButton.disabled) return;
     
     actionButton.disabled = true;
     actionButton.style.background = '#1a1a1a';
     actionButton.style.cursor = 'not-allowed';
+    actionButton.textContent = '⚡ Collecting...';
+    
+    updateProgress('🚀 Starting fast passive collection...', 'info');
+    summaryContainer.style.display = 'block';
     
     try {
-      // Step 1: Capture headers
-      actionButton.textContent = 'Preparing...';
-      updateProgress('🔧 Preparing to connect to Shopee...', 'info');
+      let scrollAttempts = 0;
+      const maxScrollAttempts = 150;
+      let noNewDataCounter = 0;
+      const maxNoNewDataAttempts = 5;
+      let previousDataCount = typeof allOrderData !== 'undefined' ? allOrderData.length : 0;
+      let lastScrollPos = -1;
       
-      let headers = null;
-      if (!capturedHeaders || !capturedHeaders['af-ac-enc-dat']) {
-        updateProgress('🌐 Connecting to your Shopee account...', 'info');
-        headers = await captureHeadersFromRealRequest();
+      while (scrollAttempts < maxScrollAttempts && noNewDataCounter < maxNoNewDataAttempts) {
+        const documentHeight = document.body.scrollHeight;
+        const currentScrollPos = window.pageYOffset || document.documentElement.scrollTop;
         
-        if (!headers || Object.keys(headers).length === 0) {
-          updateProgress('❌ Unable to connect. Please make sure you are logged in to Shopee.', 'error');
-          console.log('❌ Could not capture headers');
-          return;
-        } else {
-          updateProgress('✅ Connected successfully!', 'success');
+        // Fast instant scroll to bottom
+        window.scrollTo({ top: documentHeight, behavior: 'auto' });
+        
+        const currentCount = typeof allOrderData !== 'undefined' ? allOrderData.length : 0;
+        updateProgress(`⚡ Fast Auto-Scrolling... (${currentCount} pages captured)`, 'info');
+        
+        // Live update summary table
+        if (allOrderData && allOrderData.length > 0) {
+          updateSummary(allOrderData, true);
         }
-      } else {
-        updateProgress('✅ Already connected to your account', 'success');
+        
+        // Check if scroll position is stuck at the bottom
+        if (Math.ceil(currentScrollPos + window.innerHeight) >= documentHeight - 20 && currentScrollPos === lastScrollPos) {
+          noNewDataCounter++;
+        }
+        lastScrollPos = currentScrollPos;
+        
+        // Fast scroll tick (650ms)
+        await new Promise(resolve => setTimeout(resolve, 650));
+        
+        const newCount = typeof allOrderData !== 'undefined' ? allOrderData.length : 0;
+        if (newCount === previousDataCount) {
+          noNewDataCounter++;
+        } else {
+          noNewDataCounter = 0;
+          previousDataCount = newCount;
+        }
+        scrollAttempts++;
       }
       
-      // Step 2: Fetch data
-      actionButton.textContent = 'Downloading...';
-      updateProgress('📦 Starting to download your orders...', 'info');
-      
-      // Show empty summary table immediately
-      summaryContainer.style.display = 'block';
-      
-      const fetchResult = await directFetchWithAuth();
-      
-      // Step 3: Show result
-      if (fetchResult.success) {
+      if (allOrderData && allOrderData.length > 0) {
         actionButton.textContent = '✓ Complete!';
         actionButton.style.background = '#22c55e';
-        updateProgress('🎉 Analysis complete! Check your summary below.', 'success');
-        
-        // Store data and update summary
-        collectedOrderData = fetchResult.data;
-        updateSummary(fetchResult.allData);
+        updateProgress(`🎉 Collection complete! Captured ${allOrderData.length} pages of orders.`, 'success');
+        updateSummary(allOrderData, false);
       } else {
-        actionButton.textContent = '✗ Failed';
-        actionButton.style.background = '#ef4444';
-        updateProgress('❌ Something went wrong. Please make sure you are logged in to Shopee.', 'error');
+        actionButton.textContent = '⚠️ No Data';
+        actionButton.style.background = '#f59e0b';
+        updateProgress('⚠️ No orders captured. Try scrolling down manually or refreshing.', 'warning');
       }
       
     } catch (error) {
-      console.error('Error:', error);
+      console.error('Error during auto collection:', error);
       actionButton.textContent = '✗ Error';
       actionButton.style.background = '#ef4444';
-      updateProgress('❌ Something went wrong. Please try again or refresh the page.', 'error');
+      updateProgress('❌ Error during collection.', 'error');
     }
     
-    // Reset button after 5 seconds and hide progress
     setTimeout(() => {
-      actionButton.textContent = 'Fetch Orders';
+      actionButton.textContent = '⚡ Auto-Collect Orders';
       actionButton.style.background = '#2c2c2c';
       actionButton.style.cursor = 'pointer';
       actionButton.disabled = false;
-      hideProgress();
-    }, 5000);
+    }, 4000);
   };
   
   // Helper function to update progress status
@@ -1341,14 +1451,17 @@ function handlePageChange() {
   }
 }
 
-// Add container ID to make it detectable
 function init() {
   console.log('Shopee Purchase History Extractor loaded');
   console.log('Current URL:', window.location.href);
   console.log('Page title:', document.title);
   
-  // Skip script injection due to CSP, use direct approach instead
-  console.log('🔧 Using direct fetch approach (CSP prevents script injection)');
+  // Inject network interception script into page context
+  try {
+    injectInterceptionScript();
+  } catch (err) {
+    console.error('Failed to inject interception script:', err);
+  }
   
   // Add the fetch button
   addFetchButton();

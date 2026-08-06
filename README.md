@@ -18,22 +18,20 @@ Download all your Shopee orders in one click! Get a spreadsheet file with all yo
 4. **Right-click the ZIP file** → **"Extract All"** or **"Unzip"**
 5. **Remember where you extracted it** (you'll need this folder)
 
-### Step 2: Open Chrome Extensions
+### Step 2 (Option A): Open Chrome Extensions
 1. **Open Google Chrome**
 2. **Type this exactly**: `chrome://extensions/`
 3. **Press Enter**
+4. **Turn on Developer mode** (top-right toggle switch)
+5. **Click "Load unpacked"** and select the extracted extension folder
 
-### Step 3: Turn On Developer Mode
-1. **Look at the top-right corner** of the page
-2. **Find the switch that says "Developer mode"**
-3. **Click it to turn it ON** (it should turn blue)
-
-### Step 4: Add the Extension
-1. **Click "Load unpacked"** (appears after Step 3)
-2. **Find the folder you extracted** in Step 1
-3. **Click on the folder** to select it
-4. **Click "Select Folder"**
-5. **Done!** You should see the extension in your list
+### Step 2 (Option B): Open Firefox Add-ons (Firefox)
+1. **Open Mozilla Firefox**
+2. **Type this exactly**: `about:debugging` and press **Enter**
+3. **Click "This Firefox"** on the left sidebar
+4. **Click "Load Temporary Add-on..."**
+5. **Select the `manifest.json` file** inside the extracted extension folder
+6. **Done!** The extension is now active in Firefox
 
 ## 📱 How to Use
 

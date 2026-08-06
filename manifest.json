@@ -3,6 +3,11 @@
   "name": "Shopee Purchase History Extractor",
   "version": "1.0",
   "description": "Extract and organize your Shopee purchase history",
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "shopee-order-extractor@extension"
+    }
+  },
   
   "permissions": [
     "activeTab",
@@ -16,7 +21,10 @@
   
   "content_scripts": [
     {
-      "matches": ["*://shopee.com.my/*"],
+      "matches": [
+        "*://shopee.com.my/*",
+        "*://*.shopee.com.my/*"
+      ],
       "js": ["content.js"],
       "run_at": "document_idle"
     }
@@ -25,7 +33,10 @@
   "web_accessible_resources": [
     {
       "resources": ["debug/data.json"],
-      "matches": ["*://shopee.com.my/*"]
+      "matches": [
+        "*://shopee.com.my/*",
+        "*://*.shopee.com.my/*"
+      ]
     }
   ],
   
